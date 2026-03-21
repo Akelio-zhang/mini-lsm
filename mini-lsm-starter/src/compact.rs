@@ -136,13 +136,54 @@ impl LsmStorageInner {
         let mut builder: Option<SsTableBuilder> = None;
         let mut new_sst = Vec::new();
         let mut last_user_key = Vec::<u8>::new();
+        let mut first_kept_version_below_watermark = false;
+        let mut has_kept_newer_version = false;
+        let watermark = self.mvcc().watermark();
+        let filters = self.compaction_filters.lock().clone();
         while iter.is_valid() {
             if builder.is_none() {
                 builder = Some(SsTableBuilder::new(self.options.block_size));
             }
 
             let same_as_last_key = iter.key().key_ref() == last_user_key;
-            let should_add = !(compact_to_bottom_level && !TS_ENABLED && iter.value().is_empty());
+            if !same_as_last_key {
+                first_kept_version_below_watermark = false;
+                has_kept_newer_version = false;
+            }
+
+            let should_add = if compact_to_bottom_level && TS_ENABLED {
+                let key = iter.key().key_ref().to_vec();
+                let ts = iter.key().ts();
+                let value_is_tombstone = iter.value().is_empty();
+                let mut matched_filter = false;
+                for filter in &filters {
+                    match filter {
+                        crate::lsm_storage::CompactionFilter::Prefix(prefix) => {
+                            if key.starts_with(prefix.as_ref()) {
+                                matched_filter = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if matched_filter {
+                    ts > watermark
+                } else if ts > watermark {
+                    has_kept_newer_version = true;
+                    true
+                } else if !first_kept_version_below_watermark {
+                    first_kept_version_below_watermark = true;
+                    let keep = !(value_is_tombstone && !has_kept_newer_version);
+                    if keep {
+                        has_kept_newer_version = true;
+                    }
+                    keep
+                } else {
+                    false
+                }
+            } else {
+                !(compact_to_bottom_level && !TS_ENABLED && iter.value().is_empty())
+            };
 
             if should_add {
                 let b = builder.as_mut().unwrap();

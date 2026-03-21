@@ -36,13 +36,19 @@ type LsmIteratorInner = TwoMergeIterator<
 pub struct LsmIterator {
     inner: LsmIteratorInner,
     end_bound: Bound<Bytes>,
+    read_ts: u64,
 }
 
 impl LsmIterator {
-    pub(crate) fn new(iter: LsmIteratorInner, end_bound: Bound<Bytes>) -> Result<Self> {
+    pub(crate) fn new(
+        iter: LsmIteratorInner,
+        end_bound: Bound<Bytes>,
+        read_ts: u64,
+    ) -> Result<Self> {
         let mut s = Self {
             inner: iter,
             end_bound,
+            read_ts,
         };
         s.move_to_next_visible()?;
         Ok(s)
@@ -50,6 +56,10 @@ impl LsmIterator {
 
     fn move_to_next_visible(&mut self) -> Result<()> {
         while self.in_range() {
+            if self.inner.key().ts() > self.read_ts {
+                self.inner.next()?;
+                continue;
+            }
             if !self.inner.value().is_empty() {
                 return Ok(());
             }
