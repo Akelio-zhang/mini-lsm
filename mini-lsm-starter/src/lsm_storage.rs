@@ -452,10 +452,10 @@ impl LsmStorageInner {
             {
                 continue;
             }
-            if let Some(ref bloom) = sst.bloom {
-                if !bloom.may_contain(farmhash::fingerprint32(key)) {
-                    continue;
-                }
+            if let Some(ref bloom) = sst.bloom
+                && !bloom.may_contain(farmhash::fingerprint32(key))
+            {
+                continue;
             }
             let iter = SsTableIterator::create_and_seek_to_key(sst, key_slice)?;
             if iter.is_valid() && iter.key() == key_slice {
@@ -476,10 +476,10 @@ impl LsmStorageInner {
                 {
                     continue;
                 }
-                if let Some(ref bloom) = sst.bloom {
-                    if !bloom.may_contain(farmhash::fingerprint32(key)) {
-                        continue;
-                    }
+                if let Some(ref bloom) = sst.bloom
+                    && !bloom.may_contain(farmhash::fingerprint32(key))
+                {
+                    continue;
                 }
                 level_ssts.push(sst);
             }

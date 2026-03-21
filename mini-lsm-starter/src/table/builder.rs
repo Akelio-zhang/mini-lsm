@@ -22,7 +22,7 @@ use farmhash;
 use super::{BlockMeta, FileObject, SsTable, bloom::Bloom};
 use crate::{
     block::BlockBuilder,
-    key::{KeyBytes, KeySlice, KeyVec},
+    key::{KeyBytes, KeySlice},
     lsm_storage::BlockCache,
 };
 
