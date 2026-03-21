@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
 use std::ops::Bound;
 use std::path::Path;
@@ -62,13 +60,25 @@ impl MemTable {
     }
 
     /// Create a new mem-table with WAL
-    pub fn create_with_wal(_id: usize, _path: impl AsRef<Path>) -> Result<Self> {
-        unimplemented!()
+    pub fn create_with_wal(id: usize, path: impl AsRef<Path>) -> Result<Self> {
+        Ok(Self {
+            map: Arc::new(SkipMap::new()),
+            wal: Some(Wal::create(path)?),
+            id,
+            approximate_size: Arc::new(AtomicUsize::new(0)),
+        })
     }
 
     /// Create a memtable from WAL
-    pub fn recover_from_wal(_id: usize, _path: impl AsRef<Path>) -> Result<Self> {
-        unimplemented!()
+    pub fn recover_from_wal(id: usize, path: impl AsRef<Path>) -> Result<Self> {
+        let map = Arc::new(SkipMap::new());
+        let wal = Wal::recover(path, &map)?;
+        Ok(Self {
+            id,
+            wal: Some(wal),
+            map,
+            approximate_size: Arc::new(AtomicUsize::new(0)),
+        })
     }
 
     pub fn for_testing_put_slice(&self, key: &[u8], value: &[u8]) -> Result<()> {
@@ -106,6 +116,9 @@ impl MemTable {
             .insert(Bytes::copy_from_slice(key), Bytes::copy_from_slice(value));
         self.approximate_size
             .fetch_add(estimated_size, std::sync::atomic::Ordering::Relaxed);
+        if let Some(ref wal) = self.wal {
+            wal.put(key, value)?;
+        }
         Ok(())
     }
 
@@ -132,10 +145,8 @@ impl MemTable {
         }
         .build();
         // advance to first valid entry
-        let first = iter.with_iter_mut(|it| {
-            it.next()
-                .map(|e| (e.key().clone(), e.value().clone()))
-        });
+        let first =
+            iter.with_iter_mut(|it| it.next().map(|e| (e.key().clone(), e.value().clone())));
         if let Some(item) = first {
             iter.with_item_mut(|i| *i = item);
         }
@@ -200,10 +211,8 @@ impl StorageIterator for MemTableIterator {
     }
 
     fn next(&mut self) -> Result<()> {
-        let next_item = self.with_iter_mut(|it| {
-            it.next()
-                .map(|e| (e.key().clone(), e.value().clone()))
-        });
+        let next_item =
+            self.with_iter_mut(|it| it.next().map(|e| (e.key().clone(), e.value().clone())));
         self.with_item_mut(|item| {
             *item = next_item.unwrap_or((Bytes::new(), Bytes::new()));
         });
