@@ -71,7 +71,10 @@ impl Transaction {
         .build();
         local_iter.next()?;
         let lsm_iter = FusedIterator::new(self.inner.scan_with_ts(lower, upper, self.read_ts)?);
-        TxnIterator::create(self.clone(), TwoMergeIterator::create(local_iter, lsm_iter)?)
+        TxnIterator::create(
+            self.clone(),
+            TwoMergeIterator::create(local_iter, lsm_iter)?,
+        )
     }
 
     pub fn put(&self, key: &[u8], value: &[u8]) {
@@ -182,7 +185,9 @@ pub struct TxnLocalIterator {
 }
 
 impl TxnLocalIterator {
-    fn entry_to_item(entry: Option<crossbeam_skiplist::map::Entry<'_, Bytes, Bytes>>) -> (Bytes, Bytes) {
+    fn entry_to_item(
+        entry: Option<crossbeam_skiplist::map::Entry<'_, Bytes, Bytes>>,
+    ) -> (Bytes, Bytes) {
         entry
             .map(|e| (e.key().clone(), e.value().clone()))
             .unwrap_or_else(|| (Bytes::new(), Bytes::new()))

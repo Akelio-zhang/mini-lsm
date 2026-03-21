@@ -248,11 +248,7 @@ impl MiniLsm {
         self.inner.sync()
     }
 
-    pub fn scan(
-        &self,
-        lower: Bound<&[u8]>,
-        upper: Bound<&[u8]>,
-    ) -> Result<TxnIterator> {
+    pub fn scan(&self, lower: Bound<&[u8]>, upper: Bound<&[u8]>) -> Result<TxnIterator> {
         let txn = self.inner.mvcc().new_txn(self.inner.clone(), false);
         txn.scan(lower, upper)
     }
@@ -272,7 +268,6 @@ impl MiniLsm {
     pub fn force_full_compaction(&self) -> Result<()> {
         self.inner.force_full_compaction()
     }
-
 }
 
 fn range_overlap(
@@ -463,11 +458,8 @@ impl LsmStorageInner {
 
     pub fn get_with_ts(&self, key: &[u8], read_ts: u64) -> Result<Option<Bytes>> {
         let state = self.state.read();
-        let (mem_lower, mem_upper) = map_key_bound_plus_ts(
-            Bound::Included(key),
-            Bound::Included(key),
-            TS_RANGE_BEGIN,
-        );
+        let (mem_lower, mem_upper) =
+            map_key_bound_plus_ts(Bound::Included(key), Bound::Included(key), TS_RANGE_BEGIN);
         let mut mem_iters: Vec<Box<MemTableIterator>> = Vec::new();
         mem_iters.push(Box::new(state.memtable.scan(mem_lower, mem_upper)));
         for imm in &state.imm_memtables {
@@ -479,7 +471,11 @@ impl LsmStorageInner {
         let mut sst_iters: Vec<Box<SsTableIterator>> = Vec::new();
         for &sst_id in &state.l0_sstables {
             let sst = state.sstables.get(&sst_id).unwrap().clone();
-            if !key_within(key, sst.first_key().as_key_slice(), sst.last_key().as_key_slice()) {
+            if !key_within(
+                key,
+                sst.first_key().as_key_slice(),
+                sst.last_key().as_key_slice(),
+            ) {
                 continue;
             }
             if let Some(ref bloom) = sst.bloom
@@ -498,8 +494,11 @@ impl LsmStorageInner {
             let mut level_ssts = Vec::new();
             for &id in level_sst_ids {
                 let sst = state.sstables.get(&id).unwrap().clone();
-                if !key_within(key, sst.first_key().as_key_slice(), sst.last_key().as_key_slice())
-                {
+                if !key_within(
+                    key,
+                    sst.first_key().as_key_slice(),
+                    sst.last_key().as_key_slice(),
+                ) {
                     continue;
                 }
                 if let Some(ref bloom) = sst.bloom
@@ -510,8 +509,7 @@ impl LsmStorageInner {
                 level_ssts.push(sst);
             }
             level_iters.push(Box::new(SstConcatIterator::create_and_seek_to_key(
-                level_ssts,
-                key_slice,
+                level_ssts, key_slice,
             )?));
         }
         let level_merge = MergeIterator::create(level_iters);
@@ -771,6 +769,8 @@ impl LsmStorageInner {
         upper: Bound<&[u8]>,
     ) -> Result<FusedIterator<LsmIterator>> {
         let read_ts = self.mvcc().latest_commit_ts();
-        Ok(FusedIterator::new(self.scan_with_ts(lower, upper, read_ts)?))
+        Ok(FusedIterator::new(
+            self.scan_with_ts(lower, upper, read_ts)?,
+        ))
     }
 }

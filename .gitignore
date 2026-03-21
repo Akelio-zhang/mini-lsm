@@ -5,3 +5,6 @@ mini-lsm.db/
 lsm.db/
 
 .DS_Store
+
+# worktree
+mini-lsm-codex/

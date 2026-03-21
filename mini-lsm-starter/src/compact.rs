@@ -168,9 +168,7 @@ impl LsmStorageInner {
                         } else {
                             let k = last_key.clone();
                             !compaction_filters.iter().any(|f| match f {
-                                CompactionFilter::Prefix(prefix) => {
-                                    k.starts_with(prefix.as_ref())
-                                }
+                                CompactionFilter::Prefix(prefix) => k.starts_with(prefix.as_ref()),
                             })
                         }
                     } else {
