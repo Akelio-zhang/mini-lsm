@@ -462,7 +462,12 @@ impl LsmStorageInner {
             let mut state = self.state.write();
             let mut snapshot = state.as_ref().clone();
             snapshot.imm_memtables.pop();
-            snapshot.l0_sstables.insert(0, sst_id);
+            if self.compaction_controller.flush_to_l0() {
+                snapshot.l0_sstables.insert(0, sst_id);
+            } else {
+                // tiered compaction: each flush creates a new tier
+                snapshot.levels.insert(0, (sst_id, vec![sst_id]));
+            }
             snapshot.sstables.insert(sst_id, Arc::new(sst));
             *state = Arc::new(snapshot);
         }
