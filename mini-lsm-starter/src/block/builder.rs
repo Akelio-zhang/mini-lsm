@@ -16,7 +16,7 @@ use bytes::BufMut;
 
 use crate::key::{KeySlice, KeyVec};
 
-use super::Block;
+use super::{Block, SIZEOF_U16};
 
 /// Builds a block.
 pub struct BlockBuilder {
@@ -28,6 +28,20 @@ pub struct BlockBuilder {
     block_size: usize,
     /// The first key in the block
     first_key: KeyVec,
+}
+
+fn compute_overlap(first_key: KeySlice, key: KeySlice) -> usize {
+    let mut i = 0;
+    loop {
+        if i >= first_key.key_len() || i >= key.key_len() {
+            break;
+        }
+        if first_key.key_ref()[i] != key.key_ref()[i] {
+            break;
+        }
+        i += 1;
+    }
+    i
 }
 
 impl BlockBuilder {
@@ -42,47 +56,51 @@ impl BlockBuilder {
     }
 
     fn estimated_size(&self) -> usize {
-        // data + offsets * 2 bytes each + num_elements(2 bytes)
-        self.data.len() + self.offsets.len() * 2 + 2
+        SIZEOF_U16 /* number of key-value pairs in the block */ + self.offsets.len() * SIZEOF_U16 /* offsets */ + self.data.len()
     }
 
     /// Adds a key-value pair to the block. Returns false when the block is full.
     #[must_use]
     pub fn add(&mut self, key: KeySlice, value: &[u8]) -> bool {
-        let overlap = if self.first_key.is_empty() {
-            0
-        } else {
-            key.raw_ref()
-                .iter()
-                .zip(self.first_key.raw_ref().iter())
-                .take_while(|(a, b)| a == b)
-                .count()
-        };
-        let rest_len = key.len() - overlap;
-        // entry: overlap_len(2B) + rest_len(2B) + rest_key + val_len(2B) + val
-        let entry_size = 2 + 2 + rest_len + 2 + value.len();
-        if !self.is_empty() && self.estimated_size() + entry_size + 2 > self.block_size {
+        assert!(!key.is_empty(), "key must not be empty");
+        // entry: overlap(2B) + rest_len(2B) + rest_key + ts(8B) + val_len(2B) + val + offset(2B)
+        if self.estimated_size() + key.raw_len() + value.len() + SIZEOF_U16 * 3 > self.block_size
+            && !self.is_empty()
+        {
             return false;
         }
         self.offsets.push(self.data.len() as u16);
+        let overlap = compute_overlap(self.first_key.as_key_slice(), key);
+        // Encode key overlap.
         self.data.put_u16(overlap as u16);
-        self.data.put_u16(rest_len as u16);
-        self.data.put(&key.raw_ref()[overlap..]);
+        // Encode key length (rest only).
+        self.data.put_u16((key.key_len() - overlap) as u16);
+        // Encode key content (rest only).
+        self.data.put(&key.key_ref()[overlap..]);
+        // Encode key ts.
+        self.data.put_u64(key.ts());
+        // Encode value length.
         self.data.put_u16(value.len() as u16);
+        // Encode value content.
         self.data.put(value);
+
         if self.first_key.is_empty() {
-            self.first_key.set_from_slice(key);
+            self.first_key = key.to_key_vec();
         }
+
         true
     }
 
-    /// Check if there is no key-value pair in the block.
+    /// Check if there are no key-value pairs in the block.
     pub fn is_empty(&self) -> bool {
         self.offsets.is_empty()
     }
 
     /// Finalize the block.
     pub fn build(self) -> Block {
+        if self.is_empty() {
+            panic!("block should not be empty");
+        }
         Block {
             data: self.data,
             offsets: self.offsets,

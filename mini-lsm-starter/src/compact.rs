@@ -33,7 +33,7 @@ use crate::iterators::concat_iterator::SstConcatIterator;
 use crate::iterators::merge_iterator::MergeIterator;
 use crate::iterators::two_merge_iterator::TwoMergeIterator;
 use crate::key::KeySlice;
-use crate::lsm_storage::{LsmStorageInner, LsmStorageState};
+use crate::lsm_storage::{CompactionFilter, LsmStorageInner, LsmStorageState};
 use crate::manifest::ManifestRecord;
 use crate::table::{SsTable, SsTableBuilder, SsTableIterator};
 
@@ -129,41 +129,93 @@ pub enum CompactionOptions {
 impl LsmStorageInner {
     fn compact_generate_sst_from_iter(
         &self,
-        mut iter: impl for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>,
+        mut iter: impl for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>> + 'static,
         compact_to_bottom_level: bool,
     ) -> Result<Vec<Arc<SsTable>>> {
+        let watermark = self.mvcc().watermark();
+        let compaction_filters = self.compaction_filters.lock().clone();
         let mut builder: Option<SsTableBuilder> = None;
         let mut new_sst = Vec::new();
+        let mut last_key: Vec<u8> = Vec::new();
+        let mut first_key_below_watermark = true;
+        let mut builder_has_entries = false;
+
         while iter.is_valid() {
             if builder.is_none() {
                 builder = Some(SsTableBuilder::new(self.options.block_size));
+                builder_has_entries = false;
             }
             let b = builder.as_mut().unwrap();
-            if compact_to_bottom_level {
-                if !iter.value().is_empty() {
-                    b.add(iter.key(), iter.value());
+
+            let should_add;
+            {
+                let key_ref = iter.key().key_ref();
+                let ts = iter.key().ts();
+                let value = iter.value();
+
+                let same_key = key_ref == last_key.as_slice();
+                if !same_key {
+                    last_key.clear();
+                    last_key.extend_from_slice(key_ref);
+                    first_key_below_watermark = true;
                 }
-            } else {
-                b.add(iter.key(), iter.value());
+
+                should_add = if ts <= watermark {
+                    if first_key_below_watermark {
+                        first_key_below_watermark = false;
+                        if compact_to_bottom_level && value.is_empty() {
+                            false
+                        } else {
+                            let k = last_key.clone();
+                            !compaction_filters.iter().any(|f| match f {
+                                CompactionFilter::Prefix(prefix) => {
+                                    k.starts_with(prefix.as_ref())
+                                }
+                            })
+                        }
+                    } else {
+                        false
+                    }
+                } else {
+                    true
+                };
+
+                if should_add {
+                    b.add(iter.key(), iter.value());
+                    builder_has_entries = true;
+                }
             }
+
             iter.next()?;
-            if b.estimated_size() >= self.options.target_sst_size {
+
+            let should_split = b.estimated_size() >= self.options.target_sst_size
+                && (!iter.is_valid() || iter.key().key_ref() != last_key.as_slice());
+
+            if should_split {
+                if builder_has_entries {
+                    let sst_id = self.next_sst_id();
+                    let sst = Arc::new(builder.take().unwrap().build(
+                        sst_id,
+                        Some(self.block_cache.clone()),
+                        self.path_of_sst(sst_id),
+                    )?);
+                    new_sst.push(sst);
+                } else {
+                    builder = None;
+                }
+                builder_has_entries = false;
+            }
+        }
+
+        if let Some(b) = builder.take() {
+            if builder_has_entries {
                 let sst_id = self.next_sst_id();
-                let sst = Arc::new(builder.take().unwrap().build(
+                new_sst.push(Arc::new(b.build(
                     sst_id,
                     Some(self.block_cache.clone()),
                     self.path_of_sst(sst_id),
-                )?);
-                new_sst.push(sst);
+                )?));
             }
-        }
-        if let Some(b) = builder {
-            let sst_id = self.next_sst_id();
-            new_sst.push(Arc::new(b.build(
-                sst_id,
-                Some(self.block_cache.clone()),
-                self.path_of_sst(sst_id),
-            )?));
         }
         Ok(new_sst)
     }

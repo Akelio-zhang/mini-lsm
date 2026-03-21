@@ -68,6 +68,19 @@ impl LsmMvccInner {
     }
 
     pub fn new_txn(&self, inner: Arc<LsmStorageInner>, serializable: bool) -> Arc<Transaction> {
-        unimplemented!()
+        let mut ts_guard = self.ts.lock();
+        let read_ts = ts_guard.0;
+        ts_guard.1.add_reader(read_ts);
+        Arc::new(Transaction {
+            read_ts,
+            inner,
+            local_storage: Arc::new(crossbeam_skiplist::SkipMap::new()),
+            committed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            key_hashes: if serializable {
+                Some(parking_lot::Mutex::new((HashSet::new(), HashSet::new())))
+            } else {
+                None
+            },
+        })
     }
 }

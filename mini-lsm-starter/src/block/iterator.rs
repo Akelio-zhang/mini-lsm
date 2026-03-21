@@ -14,7 +14,12 @@
 
 use std::sync::Arc;
 
-use crate::key::{KeySlice, KeyVec};
+use bytes::Buf;
+
+use crate::{
+    block::SIZEOF_U16,
+    key::{KeySlice, KeyVec},
+};
 
 use super::Block;
 
@@ -32,35 +37,26 @@ pub struct BlockIterator {
     first_key: KeyVec,
 }
 
+impl Block {
+    fn get_first_key(&self) -> KeyVec {
+        let mut buf = &self.data[..];
+        buf.get_u16(); // overlap (always 0 for first key)
+        let key_len = buf.get_u16() as usize;
+        let key = &buf[..key_len];
+        buf.advance(key_len);
+        KeyVec::from_vec_with_ts(key.to_vec(), buf.get_u64())
+    }
+}
+
 impl BlockIterator {
     fn new(block: Arc<Block>) -> Self {
         Self {
+            first_key: block.get_first_key(),
             block,
             key: KeyVec::new(),
             value_range: (0, 0),
             idx: 0,
-            first_key: KeyVec::new(),
         }
-    }
-
-    /// Decode the key and value at `idx` into self.key and self.value_range.
-    fn decode_at(&mut self, idx: usize) {
-        let offset = self.block.offsets[idx] as usize;
-        let data = &self.block.data;
-        // prefix-compressed key: overlap_len(2B) + rest_len(2B) + rest_key
-        let overlap = u16::from_be_bytes([data[offset], data[offset + 1]]) as usize;
-        let rest_len = u16::from_be_bytes([data[offset + 2], data[offset + 3]]) as usize;
-        let rest_start = offset + 4;
-        let rest_end = rest_start + rest_len;
-        // reconstruct: first_key[..overlap] + rest
-        let mut key = self.first_key.raw_ref()[..overlap].to_vec();
-        key.extend_from_slice(&data[rest_start..rest_end]);
-        self.key = KeyVec::from_vec(key);
-        // value
-        let val_len = u16::from_be_bytes([data[rest_end], data[rest_end + 1]]) as usize;
-        let val_start = rest_end + 2;
-        let val_end = val_start + val_len;
-        self.value_range = (val_start, val_end);
     }
 
     /// Creates a block iterator and seek to the first entry.
@@ -79,11 +75,13 @@ impl BlockIterator {
 
     /// Returns the key of the current entry.
     pub fn key(&self) -> KeySlice<'_> {
+        debug_assert!(!self.key.is_empty(), "invalid iterator");
         self.key.as_key_slice()
     }
 
     /// Returns the value of the current entry.
     pub fn value(&self) -> &[u8] {
+        debug_assert!(!self.key.is_empty(), "invalid iterator");
         &self.block.data[self.value_range.0..self.value_range.1]
     }
 
@@ -94,37 +92,60 @@ impl BlockIterator {
 
     /// Seeks to the first key in the block.
     pub fn seek_to_first(&mut self) {
-        if self.block.offsets.is_empty() {
+        self.seek_to(0);
+    }
+
+    /// Seeks to the idx-th key in the block.
+    fn seek_to(&mut self, idx: usize) {
+        if idx >= self.block.offsets.len() {
+            self.key.clear();
+            self.value_range = (0, 0);
             return;
         }
-        self.idx = 0;
-        // First key has no prefix so we can decode it with empty first_key
-        // (overlap will be 0 for the first entry)
-        self.first_key = KeyVec::new(); // reset so decode_at uses overlap=0 correctly
-        self.decode_at(0);
-        self.first_key = self.key.clone();
+        let offset = self.block.offsets[idx] as usize;
+        self.seek_to_offset(offset);
+        self.idx = idx;
     }
 
     /// Move to the next key in the block.
     pub fn next(&mut self) {
         self.idx += 1;
-        if self.idx >= self.block.offsets.len() {
-            self.key.clear();
-        } else {
-            self.decode_at(self.idx);
-        }
+        self.seek_to(self.idx);
     }
 
-    /// Seek to the first key that >= `key`.
+    /// Seek to the specified position and update the current `key` and `value`
+    fn seek_to_offset(&mut self, offset: usize) {
+        let mut entry = &self.block.data[offset..];
+        let overlap_len = entry.get_u16() as usize;
+        let key_len = entry.get_u16() as usize;
+        let key = &entry[..key_len];
+        self.key.clear();
+        self.key.append(&self.first_key.key_ref()[..overlap_len]);
+        self.key.append(key);
+        entry.advance(key_len);
+        let ts = entry.get_u64();
+        self.key.set_ts(ts);
+        let value_len = entry.get_u16() as usize;
+        let value_offset_begin =
+            offset + SIZEOF_U16 + SIZEOF_U16 + std::mem::size_of::<u64>() + key_len + SIZEOF_U16;
+        let value_offset_end = value_offset_begin + value_len;
+        self.value_range = (value_offset_begin, value_offset_end);
+    }
+
+    /// Seek to the first key that is >= `key`.
     pub fn seek_to_key(&mut self, key: KeySlice) {
-        // Must establish first_key first, then do linear scan from 0
-        // (binary search doesn't work with prefix compression without random access)
-        self.seek_to_first();
-        if !self.is_valid() {
-            return;
+        let mut low = 0;
+        let mut high = self.block.offsets.len();
+        while low < high {
+            let mid = low + (high - low) / 2;
+            self.seek_to(mid);
+            assert!(self.is_valid());
+            match self.key().cmp(&key) {
+                std::cmp::Ordering::Less => low = mid + 1,
+                std::cmp::Ordering::Greater => high = mid,
+                std::cmp::Ordering::Equal => return,
+            }
         }
-        while self.is_valid() && self.key.as_key_slice() < key {
-            self.next();
-        }
+        self.seek_to(low);
     }
 }

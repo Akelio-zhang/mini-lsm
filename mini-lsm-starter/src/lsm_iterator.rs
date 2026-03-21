@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
 use std::ops::Bound;
 
 use anyhow::Result;
@@ -36,18 +33,23 @@ type LsmIteratorInner = TwoMergeIterator<
 pub struct LsmIterator {
     inner: LsmIteratorInner,
     end_bound: Bound<Bytes>,
+    read_ts: u64,
+    prev_key: Vec<u8>,
 }
 
 impl LsmIterator {
-    pub(crate) fn new(iter: LsmIteratorInner, end_bound: Bound<Bytes>) -> Result<Self> {
+    pub(crate) fn new(
+        iter: LsmIteratorInner,
+        end_bound: Bound<Bytes>,
+        read_ts: u64,
+    ) -> Result<Self> {
         let mut s = Self {
             inner: iter,
             end_bound,
+            read_ts,
+            prev_key: Vec::new(),
         };
-        // skip leading tombstones
-        while s.in_range() && s.inner.value().is_empty() {
-            s.inner.next()?;
-        }
+        s.move_to_key()?;
         Ok(s)
     }
 
@@ -57,9 +59,38 @@ impl LsmIterator {
         }
         match &self.end_bound {
             Bound::Unbounded => true,
-            Bound::Included(key) => self.inner.key().raw_ref() <= key.as_ref(),
-            Bound::Excluded(key) => self.inner.key().raw_ref() < key.as_ref(),
+            Bound::Included(key) => self.inner.key().key_ref() <= key.as_ref(),
+            Bound::Excluded(key) => self.inner.key().key_ref() < key.as_ref(),
         }
+    }
+
+    /// Advance to the next user-visible key: skip versions with ts > read_ts,
+    /// skip duplicate key bytes (we already emitted this key), and skip tombstones.
+    fn move_to_key(&mut self) -> Result<()> {
+        loop {
+            // Skip entries with ts too new for our snapshot
+            while self.inner.is_valid() && self.inner.key().ts() > self.read_ts {
+                self.inner.next()?;
+            }
+            if !self.in_range() {
+                break;
+            }
+            // Skip versions of a key we've already emitted
+            if self.inner.key().key_ref() == self.prev_key.as_slice() {
+                self.inner.next()?;
+                continue;
+            }
+            // Tombstone: mark key as visited and skip
+            if self.inner.value().is_empty() {
+                self.prev_key.clear();
+                self.prev_key.extend_from_slice(self.inner.key().key_ref());
+                self.inner.next()?;
+                continue;
+            }
+            // Valid non-tombstone entry for a new key
+            break;
+        }
+        Ok(())
     }
 }
 
@@ -67,11 +98,11 @@ impl StorageIterator for LsmIterator {
     type KeyType<'a> = &'a [u8];
 
     fn is_valid(&self) -> bool {
-        self.in_range()
+        self.in_range() && !self.inner.value().is_empty()
     }
 
     fn key(&self) -> &[u8] {
-        self.inner.key().raw_ref()
+        self.inner.key().key_ref()
     }
 
     fn value(&self) -> &[u8] {
@@ -83,11 +114,11 @@ impl StorageIterator for LsmIterator {
     }
 
     fn next(&mut self) -> Result<()> {
+        // Mark current key as seen so we don't emit older versions
+        self.prev_key.clear();
+        self.prev_key.extend_from_slice(self.inner.key().key_ref());
         self.inner.next()?;
-        // skip tombstones within range
-        while self.in_range() && self.inner.value().is_empty() {
-            self.inner.next()?;
-        }
+        self.move_to_key()?;
         Ok(())
     }
 }

@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use std::fs::{File, OpenOptions};
-use std::hash::Hasher;
 use std::io::{BufWriter, Read, Write};
 use std::path::Path;
 use std::sync::Arc;
@@ -23,7 +22,7 @@ use bytes::{Buf, BufMut, Bytes};
 use crossbeam_skiplist::SkipMap;
 use parking_lot::Mutex;
 
-use crate::key::KeySlice;
+use crate::key::{KeyBytes, KeySlice};
 
 pub struct Wal {
     file: Arc<Mutex<BufWriter<File>>>,
@@ -43,7 +42,7 @@ impl Wal {
         })
     }
 
-    pub fn recover(path: impl AsRef<Path>, skiplist: &SkipMap<Bytes, Bytes>) -> Result<Self> {
+    pub fn recover(path: impl AsRef<Path>, skiplist: &SkipMap<KeyBytes, Bytes>) -> Result<Self> {
         let mut file = OpenOptions::new()
             .read(true)
             .append(true)
@@ -51,50 +50,61 @@ impl Wal {
             .context("failed to recover WAL")?;
         let mut buf = Vec::new();
         file.read_to_end(&mut buf)?;
-        let mut ptr: &[u8] = &buf;
-        while ptr.has_remaining() {
-            let mut hasher = crc32fast::Hasher::new();
-            let key_len = ptr.get_u16() as usize;
-            hasher.write_u16(key_len as u16);
-            let key = Bytes::copy_from_slice(&ptr[..key_len]);
-            hasher.write(&key);
-            ptr.advance(key_len);
-            let val_len = ptr.get_u16() as usize;
-            hasher.write_u16(val_len as u16);
-            let value = Bytes::copy_from_slice(&ptr[..val_len]);
-            hasher.write(&value);
-            ptr.advance(val_len);
-            let checksum = ptr.get_u32();
-            if hasher.finalize() != checksum {
+        let mut rbuf: &[u8] = &buf;
+        while rbuf.has_remaining() {
+            let batch_size = rbuf.get_u32() as usize;
+            if rbuf.remaining() < batch_size {
+                bail!("incomplete WAL");
+            }
+            let batch_buf = &rbuf[..batch_size];
+            let single_checksum = crc32fast::hash(batch_buf);
+            let mut batch_read: &[u8] = batch_buf;
+            let mut kv_pairs = Vec::new();
+            while batch_read.has_remaining() {
+                let key_len = batch_read.get_u16() as usize;
+                let key = Bytes::copy_from_slice(&batch_read[..key_len]);
+                batch_read.advance(key_len);
+                let ts = batch_read.get_u64();
+                let val_len = batch_read.get_u16() as usize;
+                let value = Bytes::copy_from_slice(&batch_read[..val_len]);
+                batch_read.advance(val_len);
+                kv_pairs.push((key, ts, value));
+            }
+            rbuf.advance(batch_size);
+            let expected_checksum = rbuf.get_u32();
+            if single_checksum != expected_checksum {
                 bail!("WAL checksum mismatch");
             }
-            skiplist.insert(key, value);
+            for (key, ts, value) in kv_pairs {
+                skiplist.insert(KeyBytes::from_bytes_with_ts(key, ts), value);
+            }
         }
         Ok(Self {
             file: Arc::new(Mutex::new(BufWriter::new(file))),
         })
     }
 
-    pub fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
-        let mut file = self.file.lock();
-        let mut hasher = crc32fast::Hasher::new();
-        let mut buf = Vec::with_capacity(key.len() + value.len() + 8);
-        hasher.write_u16(key.len() as u16);
-        buf.put_u16(key.len() as u16);
-        hasher.write(key);
-        buf.put_slice(key);
-        hasher.write_u16(value.len() as u16);
-        buf.put_u16(value.len() as u16);
-        hasher.write(value);
-        buf.put_slice(value);
-        buf.put_u32(hasher.finalize());
-        file.write_all(&buf)?;
-        Ok(())
+    pub fn put(&self, key: KeySlice, value: &[u8]) -> Result<()> {
+        self.put_batch(&[(key, value)])
     }
 
-    /// Implement this in week 3, day 5; if you want to implement this earlier, use `&[u8]` as the key type.
-    pub fn put_batch(&self, _data: &[(KeySlice, &[u8])]) -> Result<()> {
-        unimplemented!()
+    pub fn put_batch(&self, data: &[(KeySlice, &[u8])]) -> Result<()> {
+        let mut file = self.file.lock();
+        let mut buf = Vec::<u8>::new();
+        for (key, value) in data {
+            buf.put_u16(key.key_len() as u16);
+            buf.put_slice(key.key_ref());
+            buf.put_u64(key.ts());
+            buf.put_u16(value.len() as u16);
+            buf.put_slice(value);
+        }
+        // write batch_size header (u32)
+        file.write_all(&(buf.len() as u32).to_be_bytes())?;
+        // write key-value pairs body
+        file.write_all(&buf)?;
+        // write checksum (u32)
+        file.write_all(&crc32fast::hash(&buf).to_be_bytes())?;
+        Ok(())
     }
 
     pub fn sync(&self) -> Result<()> {
