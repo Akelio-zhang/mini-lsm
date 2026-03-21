@@ -82,7 +82,9 @@ impl LeveledCompactionController {
         let mut real_sizes = Vec::with_capacity(self.options.max_levels);
         for i in 0..self.options.max_levels {
             real_sizes.push(
-                snapshot.levels[i].1.iter()
+                snapshot.levels[i]
+                    .1
+                    .iter()
                     .map(|id| snapshot.sstables.get(id).unwrap().table_size())
                     .sum::<u64>() as usize,
             );
@@ -161,18 +163,30 @@ impl LeveledCompactionController {
         let mut lower_set: HashSet<usize> = task.lower_level_sst_ids.iter().copied().collect();
 
         if let Some(upper_level) = task.upper_level {
-            let new_upper = snapshot.levels[upper_level - 1].1.iter()
+            let new_upper = snapshot.levels[upper_level - 1]
+                .1
+                .iter()
                 .filter_map(|id| {
-                    if upper_set.remove(id) { None } else { Some(*id) }
+                    if upper_set.remove(id) {
+                        None
+                    } else {
+                        Some(*id)
+                    }
                 })
                 .collect();
             assert!(upper_set.is_empty());
             snapshot.levels[upper_level - 1].1 = new_upper;
         } else {
             // L0
-            let new_l0 = snapshot.l0_sstables.iter()
+            let new_l0 = snapshot
+                .l0_sstables
+                .iter()
                 .filter_map(|id| {
-                    if upper_set.remove(id) { None } else { Some(*id) }
+                    if upper_set.remove(id) {
+                        None
+                    } else {
+                        Some(*id)
+                    }
                 })
                 .collect();
             assert!(upper_set.is_empty());
@@ -182,9 +196,15 @@ impl LeveledCompactionController {
         files_to_remove.extend(&task.upper_level_sst_ids);
         files_to_remove.extend(&task.lower_level_sst_ids);
 
-        let mut new_lower: Vec<usize> = snapshot.levels[task.lower_level - 1].1.iter()
+        let mut new_lower: Vec<usize> = snapshot.levels[task.lower_level - 1]
+            .1
+            .iter()
             .filter_map(|id| {
-                if lower_set.remove(id) { None } else { Some(*id) }
+                if lower_set.remove(id) {
+                    None
+                } else {
+                    Some(*id)
+                }
             })
             .collect();
         assert!(lower_set.is_empty());
@@ -192,7 +212,9 @@ impl LeveledCompactionController {
 
         if !in_recovery {
             new_lower.sort_by(|a, b| {
-                snapshot.sstables[a].first_key().cmp(snapshot.sstables[b].first_key())
+                snapshot.sstables[a]
+                    .first_key()
+                    .cmp(snapshot.sstables[b].first_key())
             });
         }
         snapshot.levels[task.lower_level - 1].1 = new_lower;

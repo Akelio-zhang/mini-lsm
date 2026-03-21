@@ -70,7 +70,12 @@ impl Manifest {
             }
             records.push(record);
         }
-        Ok((Self { file: Arc::new(Mutex::new(file)) }, records))
+        Ok((
+            Self {
+                file: Arc::new(Mutex::new(file)),
+            },
+            records,
+        ))
     }
 
     pub fn add_record(

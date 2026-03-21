@@ -20,7 +20,11 @@ use bytes::BufMut;
 use farmhash;
 
 use super::{BlockMeta, FileObject, SsTable, bloom::Bloom};
-use crate::{block::BlockBuilder, key::{KeyBytes, KeySlice, KeyVec}, lsm_storage::BlockCache};
+use crate::{
+    block::BlockBuilder,
+    key::{KeyBytes, KeySlice, KeyVec},
+    lsm_storage::BlockCache,
+};
 
 /// Builds an SSTable from key-value pairs.
 pub struct SsTableBuilder {

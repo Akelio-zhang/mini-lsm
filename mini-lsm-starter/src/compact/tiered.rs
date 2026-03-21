@@ -107,11 +107,8 @@ impl TieredCompactionController {
             "tiered compaction should not have L0 SSTs"
         );
         let mut snapshot = snapshot.clone();
-        let mut tier_to_remove: HashMap<usize, &Vec<usize>> = task
-            .tiers
-            .iter()
-            .map(|(id, files)| (*id, files))
-            .collect();
+        let mut tier_to_remove: HashMap<usize, &Vec<usize>> =
+            task.tiers.iter().map(|(id, files)| (*id, files)).collect();
 
         let mut levels = Vec::new();
         let mut new_tier_added = false;
@@ -119,7 +116,10 @@ impl TieredCompactionController {
 
         for (tier_id, files) in &snapshot.levels {
             if let Some(expected) = tier_to_remove.remove(tier_id) {
-                assert_eq!(expected, files, "tier files changed after compaction task issued");
+                assert_eq!(
+                    expected, files,
+                    "tier files changed after compaction task issued"
+                );
                 files_to_remove.extend(files.iter().copied());
             } else {
                 levels.push((*tier_id, files.clone()));
@@ -131,7 +131,10 @@ impl TieredCompactionController {
                 }
             }
         }
-        assert!(tier_to_remove.is_empty(), "some tiers not found in snapshot");
+        assert!(
+            tier_to_remove.is_empty(),
+            "some tiers not found in snapshot"
+        );
 
         snapshot.levels = levels;
         (snapshot, files_to_remove)

@@ -141,8 +141,10 @@ impl SsTable {
         let size = file.size();
         // last 8 bytes: [meta_offset(4B)][bloom_offset(4B)]
         let trailer = file.read(size - 8, 8)?;
-        let block_meta_offset = u32::from_be_bytes([trailer[0], trailer[1], trailer[2], trailer[3]]) as usize;
-        let bloom_offset = u32::from_be_bytes([trailer[4], trailer[5], trailer[6], trailer[7]]) as usize;
+        let block_meta_offset =
+            u32::from_be_bytes([trailer[0], trailer[1], trailer[2], trailer[3]]) as usize;
+        let bloom_offset =
+            u32::from_be_bytes([trailer[4], trailer[5], trailer[6], trailer[7]]) as usize;
         // meta section: [block_meta_offset, bloom_offset)
         let meta_len = bloom_offset - block_meta_offset;
         let meta_raw = file.read(block_meta_offset as u64, meta_len as u64)?;
@@ -151,8 +153,14 @@ impl SsTable {
         let bloom_len = size as usize - 8 - bloom_offset;
         let bloom_raw = file.read(bloom_offset as u64, bloom_len as u64)?;
         let bloom = Bloom::decode(&bloom_raw)?;
-        let first_key = block_meta.first().map(|m| m.first_key.clone()).unwrap_or_default();
-        let last_key = block_meta.last().map(|m| m.last_key.clone()).unwrap_or_default();
+        let first_key = block_meta
+            .first()
+            .map(|m| m.first_key.clone())
+            .unwrap_or_default();
+        let last_key = block_meta
+            .last()
+            .map(|m| m.last_key.clone())
+            .unwrap_or_default();
         Ok(Self {
             file,
             block_meta,

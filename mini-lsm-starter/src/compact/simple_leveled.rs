@@ -104,14 +104,19 @@ impl SimpleLeveledCompactionController {
             // L0 compaction — use HashSet since new L0s may have been flushed concurrently
             let mut l0_set: HashSet<usize> = task.upper_level_sst_ids.iter().copied().collect();
             files_to_remove.extend(task.upper_level_sst_ids.iter().copied());
-            snapshot.l0_sstables = snapshot.l0_sstables.iter()
+            snapshot.l0_sstables = snapshot
+                .l0_sstables
+                .iter()
                 .copied()
                 .filter(|id| !l0_set.remove(id))
                 .collect();
             assert!(l0_set.is_empty());
         }
 
-        assert_eq!(task.lower_level_sst_ids, snapshot.levels[task.lower_level - 1].1);
+        assert_eq!(
+            task.lower_level_sst_ids,
+            snapshot.levels[task.lower_level - 1].1
+        );
         files_to_remove.extend(&snapshot.levels[task.lower_level - 1].1);
         snapshot.levels[task.lower_level - 1].1 = output.to_vec();
 
