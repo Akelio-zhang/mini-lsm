@@ -240,14 +240,13 @@ impl TxnIterator {
     }
 
     fn add_to_read_set(&self) {
-        if self.iter.is_valid() {
-            if let Some(ref key_hashes) = self._txn.key_hashes {
+        if self.iter.is_valid()
+            && let Some(ref key_hashes) = self._txn.key_hashes {
                 key_hashes
                     .lock()
                     .0
                     .insert(farmhash::fingerprint32(self.iter.key()));
             }
-        }
     }
 }
 

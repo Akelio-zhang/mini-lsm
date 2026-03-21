@@ -31,7 +31,7 @@ use crate::iterators::{
     StorageIterator, concat_iterator::SstConcatIterator, merge_iterator::MergeIterator,
     two_merge_iterator::TwoMergeIterator,
 };
-use crate::key::{KeySlice, TS_DEFAULT, TS_RANGE_BEGIN};
+use crate::key::{KeySlice, TS_RANGE_BEGIN};
 use crate::lsm_iterator::{FusedIterator, LsmIterator};
 use crate::manifest::{Manifest, ManifestRecord};
 use crate::mem_table::{MemTable, MemTableIterator, map_key_bound_plus_ts};
@@ -516,7 +516,7 @@ impl LsmStorageInner {
 
         let two_merge = TwoMergeIterator::create(mem_merge, sst_merge)?;
         let three_merge = TwoMergeIterator::create(two_merge, level_merge)?;
-        let mut iter = LsmIterator::new(three_merge, Bound::Unbounded, read_ts)?;
+        let iter = LsmIterator::new(three_merge, Bound::Unbounded, read_ts)?;
         if iter.is_valid() && iter.key() == key {
             return Ok(Some(Bytes::copy_from_slice(iter.value())));
         }

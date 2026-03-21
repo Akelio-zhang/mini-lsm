@@ -205,8 +205,8 @@ impl LsmStorageInner {
             }
         }
 
-        if let Some(b) = builder.take() {
-            if builder_has_entries {
+        if let Some(b) = builder.take()
+            && builder_has_entries {
                 let sst_id = self.next_sst_id();
                 new_sst.push(Arc::new(b.build(
                     sst_id,
@@ -214,7 +214,6 @@ impl LsmStorageInner {
                     self.path_of_sst(sst_id),
                 )?));
             }
-        }
         Ok(new_sst)
     }
 
