@@ -106,3 +106,12 @@ Tests are gated behind `cargo x copy-test --week W --day D`, which copies `src/t
 ## Test Utilities
 
 `src/tests/harness.rs` provides helpers used across test files. Tests use `tempfile::tempdir()` for isolated storage directories. `LsmStorageOptions::default_for_week1_test()` / `default_for_week2_test()` provide preset configs. `force_freeze_memtable` and `force_flush_next_imm_memtable` are exposed for test control.
+
+## Implementation Gotchas
+
+- **`trigger_flush`** lives in `src/compact.rs`, not `lsm_storage.rs`
+- **SST file trailer** (after Day 7): 8 bytes `[meta_offset(4B)][bloom_offset(4B)]` — not 4 bytes as in Day 4 draft
+- **ouroboros `MemTableIterator`**: must clone key/value data *inside* `with_iter_mut` closure — cannot return references from it; use `with_item_mut` separately for item mutation
+- **`LsmIterator` upper bound**: SST iterators are unaware of scan bounds; carry `end_bound: Bound<Bytes>` in `LsmIterator` and check in `is_valid()` / `next()`
+- **SST range filter bounds**: `Excluded(x)` means skip SST if `sst.first_key >= x` (not `>`); use `>=`/`<=` for Excluded, `>`/`<` for Included
+- **Block `seek_to_key`**: must be linear scan from first (binary search breaks with prefix key compression)
