@@ -34,7 +34,7 @@ use crate::iterators::{
 use crate::key::{KeySlice, TS_RANGE_BEGIN};
 use crate::lsm_iterator::{FusedIterator, LsmIterator};
 use crate::manifest::{Manifest, ManifestRecord};
-use crate::mem_table::{MemTable, MemTableIterator, map_key_bound_plus_ts};
+use crate::mem_table::{MemTable, MemTableIterator, map_bound, map_key_bound_plus_ts};
 use crate::mvcc::LsmMvccInner;
 use crate::mvcc::txn::{Transaction, TxnIterator};
 use crate::table::FileObject;
@@ -715,11 +715,7 @@ impl LsmStorageInner {
         }
         let sst_merge = MergeIterator::create(sst_iters);
 
-        let end_bound = match upper {
-            Bound::Included(key) => Bound::Included(Bytes::copy_from_slice(key)),
-            Bound::Excluded(key) => Bound::Excluded(Bytes::copy_from_slice(key)),
-            Bound::Unbounded => Bound::Unbounded,
-        };
+        let end_bound = map_bound(upper);
 
         let mut level_iters: Vec<Box<SstConcatIterator>> = Vec::new();
         for (_, level_sst_ids) in &state.levels {

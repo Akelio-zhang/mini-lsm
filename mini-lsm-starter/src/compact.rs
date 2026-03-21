@@ -166,7 +166,7 @@ impl LsmStorageInner {
                         if compact_to_bottom_level && value.is_empty() {
                             false
                         } else {
-                            let k = last_key.clone();
+                            let k: &[u8] = &last_key;
                             !compaction_filters.iter().any(|f| match f {
                                 CompactionFilter::Prefix(prefix) => k.starts_with(prefix.as_ref()),
                             })

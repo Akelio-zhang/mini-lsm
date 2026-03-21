@@ -62,10 +62,16 @@ impl BlockMeta {
     }
 
     /// Decode block meta from a buffer.
-    pub fn decode_block_meta(mut buf: impl Buf) -> Result<(Vec<BlockMeta>, u64)> {
+    /// Format: [num_blocks(4B)] ([offset(4B)][fk_len(2B)][fk_bytes][fk_ts(8B)][lk_len(2B)][lk_bytes][lk_ts(8B)])* [max_ts(8B)] [checksum(4B)]
+    /// The checksum covers everything after num_blocks(4B).
+    pub fn decode_block_meta(buf: &[u8]) -> Result<(Vec<BlockMeta>, u64)> {
+        // Verify checksum: covers buf[4..buf.len()-4]
+        let checksum = u32::from_be_bytes(buf[buf.len() - 4..].try_into().unwrap());
+        if crc32fast::hash(&buf[4..buf.len() - 4]) != checksum {
+            bail!("block meta checksum mismatch");
+        }
+        let mut buf = &buf[..];
         let num = buf.get_u32() as usize;
-        // Compute checksum: remaining buf minus last 4 bytes is the data
-        // We verify after parsing
         let mut metas = Vec::with_capacity(num);
         for _ in 0..num {
             let offset = buf.get_u32() as usize;
@@ -80,7 +86,7 @@ impl BlockMeta {
             });
         }
         let max_ts = buf.get_u64();
-        let _checksum = buf.get_u32();
+        buf.get_u32(); // consume checksum (already verified above)
         Ok((metas, max_ts))
     }
 }

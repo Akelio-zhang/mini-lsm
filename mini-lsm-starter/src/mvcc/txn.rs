@@ -102,9 +102,6 @@ impl Transaction {
     }
 
     pub fn commit(&self) -> Result<()> {
-        self.committed
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-
         let _commit_lock = if self.key_hashes.is_some() {
             Some(self.inner.mvcc().commit_lock.lock())
         } else {
@@ -124,6 +121,9 @@ impl Transaction {
             }
         }
 
+        self.committed
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
         let batch: Vec<WriteBatchRecord<Bytes>> = self
             .local_storage
             .iter()
@@ -140,14 +140,10 @@ impl Transaction {
             let ts = self.inner.write_batch_inner(&batch)?;
 
             if let Some(ref key_hashes) = self.key_hashes {
-                let write_set = key_hashes.lock().1.clone();
+                let write_set = std::mem::take(&mut key_hashes.lock().1);
                 let mut committed_txns = self.inner.mvcc().committed_txns.lock();
                 let watermark = self.inner.mvcc().watermark();
-                let to_remove: Vec<u64> =
-                    committed_txns.range(..watermark).map(|(&k, _)| k).collect();
-                for k in to_remove {
-                    committed_txns.remove(&k);
-                }
+                committed_txns.retain(|&k, _| k >= watermark);
                 committed_txns.insert(
                     ts,
                     CommittedTxnData {
