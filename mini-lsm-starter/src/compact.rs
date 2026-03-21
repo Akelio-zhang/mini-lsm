@@ -33,6 +33,7 @@ use crate::iterators::concat_iterator::SstConcatIterator;
 use crate::iterators::merge_iterator::MergeIterator;
 use crate::iterators::two_merge_iterator::TwoMergeIterator;
 use crate::key::KeySlice;
+use crate::key::TS_ENABLED;
 use crate::lsm_storage::{LsmStorageInner, LsmStorageState};
 use crate::manifest::ManifestRecord;
 use crate::table::{SsTable, SsTableBuilder, SsTableIterator};
@@ -134,28 +135,37 @@ impl LsmStorageInner {
     ) -> Result<Vec<Arc<SsTable>>> {
         let mut builder: Option<SsTableBuilder> = None;
         let mut new_sst = Vec::new();
+        let mut last_user_key = Vec::<u8>::new();
         while iter.is_valid() {
             if builder.is_none() {
                 builder = Some(SsTableBuilder::new(self.options.block_size));
             }
-            let b = builder.as_mut().unwrap();
-            if compact_to_bottom_level {
-                if !iter.value().is_empty() {
-                    b.add(iter.key(), iter.value());
+
+            let same_as_last_key = iter.key().key_ref() == last_user_key;
+            let should_add = !(compact_to_bottom_level && !TS_ENABLED && iter.value().is_empty());
+
+            if should_add {
+                let b = builder.as_mut().unwrap();
+                // Keep all versions of the same user key in one SST to avoid overlapping key
+                // ranges in leveled files.
+                if b.estimated_size() >= self.options.target_sst_size && !same_as_last_key {
+                    let sst_id = self.next_sst_id();
+                    let sst = Arc::new(builder.take().unwrap().build(
+                        sst_id,
+                        Some(self.block_cache.clone()),
+                        self.path_of_sst(sst_id),
+                    )?);
+                    new_sst.push(sst);
+                    builder = Some(SsTableBuilder::new(self.options.block_size));
                 }
-            } else {
-                b.add(iter.key(), iter.value());
+                builder.as_mut().unwrap().add(iter.key(), iter.value());
+            }
+
+            if !same_as_last_key {
+                last_user_key.clear();
+                last_user_key.extend(iter.key().key_ref());
             }
             iter.next()?;
-            if b.estimated_size() >= self.options.target_sst_size {
-                let sst_id = self.next_sst_id();
-                let sst = Arc::new(builder.take().unwrap().build(
-                    sst_id,
-                    Some(self.block_cache.clone()),
-                    self.path_of_sst(sst_id),
-                )?);
-                new_sst.push(sst);
-            }
         }
         if let Some(b) = builder {
             let sst_id = self.next_sst_id();

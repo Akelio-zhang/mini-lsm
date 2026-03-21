@@ -30,6 +30,20 @@ pub struct BlockBuilder {
     first_key: KeyVec,
 }
 
+fn compute_overlap(first_key: KeySlice, key: KeySlice) -> usize {
+    let mut i = 0;
+    loop {
+        if i >= first_key.key_len() || i >= key.key_len() {
+            break;
+        }
+        if first_key.key_ref()[i] != key.key_ref()[i] {
+            break;
+        }
+        i += 1;
+    }
+    i
+}
+
 impl BlockBuilder {
     /// Creates a new block builder.
     pub fn new(block_size: usize) -> Self {
@@ -49,25 +63,23 @@ impl BlockBuilder {
     /// Adds a key-value pair to the block. Returns false when the block is full.
     #[must_use]
     pub fn add(&mut self, key: KeySlice, value: &[u8]) -> bool {
+        assert!(!key.is_empty(), "key must not be empty");
         let overlap = if self.first_key.is_empty() {
             0
         } else {
-            key.raw_ref()
-                .iter()
-                .zip(self.first_key.raw_ref().iter())
-                .take_while(|(a, b)| a == b)
-                .count()
+            compute_overlap(self.first_key.as_key_slice(), key)
         };
-        let rest_len = key.len() - overlap;
-        // entry: overlap_len(2B) + rest_len(2B) + rest_key + val_len(2B) + val
-        let entry_size = 2 + 2 + rest_len + 2 + value.len();
+        let rest_len = key.key_len() - overlap;
+        // entry: overlap_len(2B) + rest_len(2B) + rest_key + ts(8B) + val_len(2B) + val
+        let entry_size = 2 + 2 + rest_len + std::mem::size_of::<u64>() + 2 + value.len();
         if !self.is_empty() && self.estimated_size() + entry_size + 2 > self.block_size {
             return false;
         }
         self.offsets.push(self.data.len() as u16);
         self.data.put_u16(overlap as u16);
         self.data.put_u16(rest_len as u16);
-        self.data.put(&key.raw_ref()[overlap..]);
+        self.data.put(&key.key_ref()[overlap..]);
+        self.data.put_u64(key.ts());
         self.data.put_u16(value.len() as u16);
         self.data.put(value);
         if self.first_key.is_empty() {

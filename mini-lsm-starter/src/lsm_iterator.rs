@@ -44,11 +44,21 @@ impl LsmIterator {
             inner: iter,
             end_bound,
         };
-        // skip leading tombstones
-        while s.in_range() && s.inner.value().is_empty() {
-            s.inner.next()?;
-        }
+        s.move_to_next_visible()?;
         Ok(s)
+    }
+
+    fn move_to_next_visible(&mut self) -> Result<()> {
+        while self.in_range() {
+            if !self.inner.value().is_empty() {
+                return Ok(());
+            }
+            let tombstone_key = Bytes::copy_from_slice(self.inner.key().key_ref());
+            while self.in_range() && self.inner.key().key_ref() == tombstone_key.as_ref() {
+                self.inner.next()?;
+            }
+        }
+        Ok(())
     }
 
     fn in_range(&self) -> bool {
@@ -57,8 +67,8 @@ impl LsmIterator {
         }
         match &self.end_bound {
             Bound::Unbounded => true,
-            Bound::Included(key) => self.inner.key().raw_ref() <= key.as_ref(),
-            Bound::Excluded(key) => self.inner.key().raw_ref() < key.as_ref(),
+            Bound::Included(key) => self.inner.key().key_ref() <= key.as_ref(),
+            Bound::Excluded(key) => self.inner.key().key_ref() < key.as_ref(),
         }
     }
 }
@@ -71,7 +81,7 @@ impl StorageIterator for LsmIterator {
     }
 
     fn key(&self) -> &[u8] {
-        self.inner.key().raw_ref()
+        self.inner.key().key_ref()
     }
 
     fn value(&self) -> &[u8] {
@@ -83,11 +93,12 @@ impl StorageIterator for LsmIterator {
     }
 
     fn next(&mut self) -> Result<()> {
-        self.inner.next()?;
-        // skip tombstones within range
-        while self.in_range() && self.inner.value().is_empty() {
+        let current_key = Bytes::copy_from_slice(self.inner.key().key_ref());
+        // skip all history versions for the current user key
+        while self.in_range() && self.inner.key().key_ref() == current_key.as_ref() {
             self.inner.next()?;
         }
+        self.move_to_next_visible()?;
         Ok(())
     }
 }

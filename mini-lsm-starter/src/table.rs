@@ -50,12 +50,14 @@ impl BlockMeta {
         use bytes::BufMut;
         for meta in block_meta {
             buf.put_u32(meta.offset as u32);
-            let fk = meta.first_key.raw_ref();
+            let fk = meta.first_key.key_ref();
             buf.put_u16(fk.len() as u16);
             buf.put(fk);
-            let lk = meta.last_key.raw_ref();
+            buf.put_u64(meta.first_key.ts());
+            let lk = meta.last_key.key_ref();
             buf.put_u16(lk.len() as u16);
             buf.put(lk);
+            buf.put_u64(meta.last_key.ts());
         }
     }
 
@@ -65,9 +67,9 @@ impl BlockMeta {
         while buf.remaining() > 0 {
             let offset = buf.get_u32() as usize;
             let fk_len = buf.get_u16() as usize;
-            let first_key = KeyBytes::from_bytes(buf.copy_to_bytes(fk_len));
+            let first_key = KeyBytes::from_bytes_with_ts(buf.copy_to_bytes(fk_len), buf.get_u64());
             let lk_len = buf.get_u16() as usize;
-            let last_key = KeyBytes::from_bytes(buf.copy_to_bytes(lk_len));
+            let last_key = KeyBytes::from_bytes_with_ts(buf.copy_to_bytes(lk_len), buf.get_u64());
             metas.push(BlockMeta {
                 offset,
                 first_key,
@@ -161,6 +163,9 @@ impl SsTable {
             .last()
             .map(|m| m.last_key.clone())
             .unwrap_or_default();
+        let max_ts = block_meta.iter().fold(0, |acc, meta| {
+            acc.max(meta.first_key.ts()).max(meta.last_key.ts())
+        });
         Ok(Self {
             file,
             block_meta,
@@ -170,7 +175,7 @@ impl SsTable {
             first_key,
             last_key,
             bloom: Some(bloom),
-            max_ts: 0,
+            max_ts,
         })
     }
 

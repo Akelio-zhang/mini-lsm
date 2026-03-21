@@ -53,12 +53,25 @@ impl BlockIterator {
         let rest_start = offset + 4;
         let rest_end = rest_start + rest_len;
         // reconstruct: first_key[..overlap] + rest
-        let mut key = self.first_key.raw_ref()[..overlap].to_vec();
+        let mut key = self.first_key.key_ref()[..overlap].to_vec();
         key.extend_from_slice(&data[rest_start..rest_end]);
-        self.key = KeyVec::from_vec(key);
+        // timestamp is stored right after the key bytes
+        let ts_pos = rest_end;
+        let ts = u64::from_be_bytes([
+            data[ts_pos],
+            data[ts_pos + 1],
+            data[ts_pos + 2],
+            data[ts_pos + 3],
+            data[ts_pos + 4],
+            data[ts_pos + 5],
+            data[ts_pos + 6],
+            data[ts_pos + 7],
+        ]);
+        self.key = KeyVec::from_vec_with_ts(key, ts);
         // value
-        let val_len = u16::from_be_bytes([data[rest_end], data[rest_end + 1]]) as usize;
-        let val_start = rest_end + 2;
+        let val_len_pos = ts_pos + std::mem::size_of::<u64>();
+        let val_len = u16::from_be_bytes([data[val_len_pos], data[val_len_pos + 1]]) as usize;
+        let val_start = val_len_pos + 2;
         let val_end = val_start + val_len;
         self.value_range = (val_start, val_end);
     }

@@ -4,4 +4,6 @@ sync-tmp/
 mini-lsm.db/
 lsm.db/
 
+
+**/target
 .DS_Store
