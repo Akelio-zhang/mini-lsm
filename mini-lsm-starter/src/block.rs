@@ -30,13 +30,27 @@ pub struct Block {
 
 impl Block {
     /// Encode the internal data to the data layout illustrated in the course
-    /// Note: You may want to recheck if any of the expected field is missing from your output
     pub fn encode(&self) -> Bytes {
-        unimplemented!()
+        let mut buf = self.data.clone();
+        for offset in &self.offsets {
+            buf.extend_from_slice(&offset.to_be_bytes());
+        }
+        buf.extend_from_slice(&(self.offsets.len() as u16).to_be_bytes());
+        Bytes::from(buf)
     }
 
     /// Decode from the data layout, transform the input `data` to a single `Block`
     pub fn decode(data: &[u8]) -> Self {
-        unimplemented!()
+        let n = data.len();
+        let num_elements = u16::from_be_bytes([data[n - 2], data[n - 1]]) as usize;
+        let offsets_start = n - 2 - num_elements * 2;
+        let offsets = (0..num_elements)
+            .map(|i| {
+                let pos = offsets_start + i * 2;
+                u16::from_be_bytes([data[pos], data[pos + 1]])
+            })
+            .collect();
+        let data = data[..offsets_start].to_vec();
+        Self { data, offsets }
     }
 }
